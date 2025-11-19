@@ -1,0 +1,170 @@
+var dt = Assam.filter(ee.Filter.eq('Name', 'MARIGAON'));  
+Map.addLayer(dt);
+Map.centerObject(dt);
+
+var collection = ee.ImageCollection('COPERNICUS/S1_GRD')
+    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+    .filter(ee.Filter.eq('instrumentMode', 'IW'))
+    .filter(ee.Filter.or(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'), ee.Filter.eq('orbitProperties_pass', 'ASCENDING')));
+
+//Filtering Images for Before and After the Flood and Creating mosaic images
+var before = collection.filter(ee.Filter.date('2016-03-01', '2016-04-10')).filterBounds(dt);    
+var after = collection.filter(ee.Filter.date('2016-06-15', '2016-08-06')).filterBounds(dt);
+
+print(before);
+print(after);
+
+var before_image = before.select('VH').mosaic().clip(dt);
+var after_image = after.select('VH').mosaic().clip(dt);
+
+// Application of Filter
+var before_filtered = before_image.focal_median(30, "circle", "meters");
+var after_filtered = after_image.focal_median(30, "circle", "meters");
+
+//Masking out Flood Inundation and Water submerged layer
+var flood = before_filtered.gt(-20).and(after_filtered.lt(-20));
+var flood_mask = flood.updateMask(flood.eq(1));
+var water = before_filtered.lt(-20).and(after_filtered.lt(-20));
+var water_mask = water.updateMask(water.eq(1));
+
+//Adding layer
+Map.addLayer(before_filtered,{min:-25,max:0},'before_filtered')
+Map.addLayer(after_filtered,{min:-25,max:0},'after_filtered')
+Map.addLayer(flood_mask,{palette:['Yellow']},'Flood_Inundation')
+Map.addLayer(water_mask,{palette:['Blue']},'Water')
+
+// Area Calculations
+var district_area = ee.Image.pixelArea().clip(dt);
+var total_district_area = district_area.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: dt.geometry(),
+  scale: 30,
+  maxPixels: 1e9
+}).get('area');
+var total_district_area_km2 = ee.Number(total_district_area).divide(1e6);
+print('Total District Area (sq.km):', total_district_area_km2);
+
+var flood_area = ee.Image.pixelArea().updateMask(flood_mask).clip(dt);
+var total_flood_area = flood_area.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: dt.geometry(),
+  scale: 30,
+  maxPixels: 1e9
+}).get('area');
+var total_flood_area_km2 = ee.Number(total_flood_area).divide(1e6);
+print('Flood Inundated Area (sq.km):', total_flood_area_km2);
+
+var water_area = ee.Image.pixelArea().updateMask(water_mask).clip(dt);
+var total_water_area = water_area.reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: dt.geometry(),
+  scale: 30,
+  maxPixels: 1e9
+}).get('area');
+var total_water_area_km2 = ee.Number(total_water_area).divide(1e6);
+print('Waterbody Area (sq.km):', total_water_area_km2);
+
+
+//Map Layout 
+// Set position of panel
+var legend = ui.Panel({
+    style: {
+        position: 'bottom-left',
+        padding: '8px 15px'
+    }
+});
+
+
+// Create legend title
+var legendTitle = ui.Label({
+    value: 'Legend',
+    style: {
+        fontWeight: 'bold',
+        fontSize: '20px',
+        margin: '0 0 4px 0',
+        padding: '0'
+    }
+});
+
+// Add the title to the panel
+legend.add(legendTitle);
+
+// Creates and styles 1 row of the legend.
+var makeRow = function(color, name) {
+    var colorBox = ui.Label({
+        style: {
+            backgroundColor: color,
+            padding: '14px',
+            margin: '0 0 4px 0'
+        }
+    });
+
+    var description = ui.Label({
+        value: name,
+        style: {margin: '0 0 4px 6px'}
+    });
+
+    return ui.Panel({
+        widgets: [colorBox, description],
+        layout: ui.Panel.Layout.Flow('horizontal')
+    });
+};
+
+// Palette with the colors
+var palette = ['Yellow', 'Blue'];
+
+// Names of the legend
+var names = ['Flood Inundation', 'Water body'];
+
+// Add color and names
+for (var i = 0; i < 2; i++) {
+    legend.add(makeRow(palette[i], names[i]));
+}
+
+// Add legend to map
+Map.add(legend);
+
+// Set position of title panel
+var title = ui.Panel({
+    style: {
+        position: 'top-center',
+        padding: '8px 15px'
+    }
+});
+
+// Create map title
+var mapTitle = ui.Label({
+    value: 'Flood Inundation Mapping of Marigaon District, Assam', 
+    style: {
+        fontWeight: 'bold',
+        fontSize: '28px',
+        margin: '0 0 4px 0',
+        padding: '0'
+    }
+});
+
+// Add title to panel
+title.add(mapTitle);
+Map.add(title);
+
+// Export the before_filtered layer
+Export.image.toDrive({
+  image: before_filtered,
+  description: 'Before_Filtered',
+  folder: 'FloodMapping', // Change this to your desired folder in Google Drive
+  fileNamePrefix: 'before_filtered',
+  scale: 30,
+  region: dt.geometry(),
+  maxPixels: 1e9
+});
+
+// Export the after_filtered layer
+Export.image.toDrive({
+  image: after_filtered,
+  description: 'After_Filtered',
+  folder: 'FloodMapping',
+  fileNamePrefix: 'after_filtered',
+  scale: 30,
+  region: dt.geometry(),
+  maxPixels: 1e9
+});
